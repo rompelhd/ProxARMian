@@ -20,3 +20,15 @@ The goal is to make Proxmox more accessible to the ARM ecosystem by allowing use
 ProxARMian automates the installation and configuration of the main Proxmox VE components, handling repository setup, package installation, hostname resolution, service initialization, and SSL certificate generation.
 
 The project aims to simplify the process of deploying a Proxmox-based environment on ARM64 hardware, opening new possibilities for home labs, lightweight servers, edge computing, and ARM-based virtualization experiments.
+
+Use now:
+```bash
+curl -sS https://raw.githubusercontent.com/rompelhd/ProxARMian/refs/heads/main/proxarmian.sh | bash
+```
+
+Read before execution:
+```bash
+curl -sS https://raw.githubusercontent.com/rompelhd/ProxARMian/refs/heads/main/proxarmian.sh -o proxarmian.sh
+less proxarmian.sh
+bash proxarmian.sh
+```
