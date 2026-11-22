@@ -56,6 +56,17 @@ Architectures: arm64
 Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
 EOF
 
+echo "[3.1/9] Disabling Proxmox Enterprise repository..."
+
+ENTERPRISE_FILE="/etc/apt/sources.list.d/pve-enterprise.sources"
+
+if [ -f "$ENTERPRISE_FILE" ]; then
+    sed -i '/^[[:space:]]*#/! s/^/#/' "$ENTERPRISE_FILE"
+    echo "Proxmox Enterprise repository disabled."
+else
+    echo "Proxmox Enterprise repository not found. Skipping."
+fi
+
 echo "[4/9] Configuring Proxmox kernel protection..."
 
 cat > /etc/apt/preferences.d/proxmox-kernel-pin <<'EOF'
