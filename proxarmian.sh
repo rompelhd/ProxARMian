@@ -35,7 +35,7 @@ wget -O /tmp/proxmox-release-trixie.gpg \
     https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg
 
 install -m 0644 \
-    /tmp/proxmox-release-trixie.gpg \                                                               
+    /tmp/proxmox-release-trixie.gpg \
     /usr/share/keyrings/proxmox-archive-keyring.gpg
 
 rm -f /tmp/proxmox-release-trixie.gpg
