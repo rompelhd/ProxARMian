@@ -31,14 +31,19 @@ apt-get install -y \
 
 echo "[2/9] Installing Proxmox GPG key..."
 
-wget -O /tmp/proxmox-release-trixie.gpg \
-    https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg
+GPG_KEY="/tmp/proxmox-archive-keyring-trixie.gpg"
 
-install -m 0644 \
-    /tmp/proxmox-release-trixie.gpg \
+EXPECTED_SHA256="136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45"
+
+wget -O "$GPG_KEY" \
+    https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg
+
+echo "$EXPECTED_SHA256  $GPG_KEY" | sha256sum -c -
+
+install -m 0644 "$GPG_KEY" \
     /usr/share/keyrings/proxmox-archive-keyring.gpg
 
-rm -f /tmp/proxmox-release-trixie.gpg
+rm -f "$GPG_KEY"
 
 echo "[3/9] Configuring Proxmox repository..."
 
