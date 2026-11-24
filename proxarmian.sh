@@ -11,25 +11,28 @@ if [ "$(dpkg --print-architecture)" != "arm64" ]; then
     exit 1
 fi
 
-HOSTNAME=$(hostname)
-IP_ADDRESS=$(hostname -I | awk '{print $1}')
-
-if [ -z "$IP_ADDRESS" ]; then
-    echo "ERROR: Could not detect the system IP address."
+if ! getent hosts download.proxmox.com >/dev/null 2>&1; then
+    echo "ERROR: DNS resolution failed."
     exit 1
 fi
 
-echo "[1/9] Installing required packages..."
+if ! timeout 5 bash -c '</dev/tcp/download.proxmox.com/443' 2>/dev/null; then
+    echo "ERROR: Cannot connect to Proxmox repository."
+    exit 1
+fi
+
+echo "[1/10] Installing required packages..."
 
 apt-get update
 
 apt-get install -y \
     ca-certificates \
     wget \
+    ifupdown2 \
     openssh-client \
     openssh-server
 
-echo "[2/9] Installing Proxmox GPG key..."
+echo "[2/10] Installing Proxmox GPG key..."
 
 GPG_KEY="/tmp/proxmox-archive-keyring-trixie.gpg"
 
@@ -45,7 +48,7 @@ install -m 0644 "$GPG_KEY" \
 
 rm -f "$GPG_KEY"
 
-echo "[3/9] Configuring Proxmox repository..."
+echo "[3/10] Configuring Proxmox repository..."
 
 cat > /etc/apt/sources.list.d/proxmox.sources <<'EOF'
 Types: deb
@@ -56,7 +59,7 @@ Architectures: arm64
 Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
 EOF
 
-echo "[3.1/9] Disabling Proxmox Enterprise repository..."
+echo "[3.1/10] Disabling Proxmox Enterprise repository..."
 
 ENTERPRISE_FILE="/etc/apt/sources.list.d/pve-enterprise.sources"
 
@@ -67,7 +70,7 @@ else
     echo "Proxmox Enterprise repository not found. Skipping."
 fi
 
-echo "[4/9] Configuring Proxmox kernel protection..."
+echo "[4/10] Configuring Proxmox kernel protection..."
 
 cat > /etc/apt/preferences.d/proxmox-kernel-pin <<'EOF'
 Package: proxmox-kernel-*
@@ -75,7 +78,130 @@ Pin: origin download.proxmox.com
 Pin-Priority: -1
 EOF
 
-echo "[5/9] Configuring hostname resolution..."
+echo "[5/10] Configuring Proxmox network bridge"
+
+INTERFACES_FILE="/etc/network/interfaces"
+
+mapfile -t PHYSICAL_INTERFACES < <(
+    for path in /sys/class/net/*; do
+        interface=$(basename "$path")
+
+        [[ "$interface" == "lo" ]] && continue
+        [[ -d "$path/device" ]] || continue
+
+        echo "$interface"
+    done
+)
+
+if [[ ${#PHYSICAL_INTERFACES[@]} -eq 0 ]]; then
+    echo "ERROR: No physical network interfaces found."
+    exit 1
+fi
+
+echo "Available physical interfaces:"
+
+for interface in "${PHYSICAL_INTERFACES[@]}"; do
+    echo " - $interface"
+done
+
+read -r -p "Select physical interface: " PHYSICAL_INTERFACE
+
+if [[ ! " ${PHYSICAL_INTERFACES[*]} " =~ " ${PHYSICAL_INTERFACE} " ]]; then
+    echo "ERROR: Invalid physical interface."
+    exit 1
+fi
+
+read -r -p "Bridge name [vmbr0]: " BRIDGE_NAME
+BRIDGE_NAME=${BRIDGE_NAME:-vmbr0}
+
+if [[ ! "$BRIDGE_NAME" =~ ^vmbr[0-9]+$ ]]; then
+    echo "ERROR: Invalid bridge name."
+    exit 1
+fi
+
+if [[ -e "/sys/class/net/$BRIDGE_NAME" ]] ||
+   grep -Eq "^(auto|iface) ${BRIDGE_NAME}([[:space:]]|$)" "$INTERFACES_FILE"; then
+    echo "ERROR: Bridge already exists."
+    exit 1
+fi
+
+read -r -p "Static IP with CIDR: " STATIC_IP
+read -r -p "Gateway: " GATEWAY
+read -r -p "DNS server: " DNS_SERVER
+
+if [[ ! "$STATIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] ||
+   [[ ! "$GATEWAY" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+   [[ ! "$DNS_SERVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ERROR: Invalid network configuration."
+    exit 1
+fi
+
+echo ""
+echo "Bridge configuration:"
+echo "Physical interface: $PHYSICAL_INTERFACE"
+echo "Bridge: $BRIDGE_NAME"
+echo "IP: $STATIC_IP"
+echo "Gateway: $GATEWAY"
+echo "DNS: $DNS_SERVER"
+echo ""
+
+read -r -p "Create and apply bridge? (y/n): " CONFIRM
+
+if [[ "$CONFIRM" =~ ^[yY]$ ]]; then
+
+    BACKUP_FILE="${INTERFACES_FILE}.backup.$(date +%Y%m%d%H%M%S)"
+    cp -a "$INTERFACES_FILE" "$BACKUP_FILE"
+
+    sed -i -E "/^auto / {
+        s/(^|[[:space:]])${PHYSICAL_INTERFACE}([[:space:]]|$)/ /g
+    }" "$INTERFACES_FILE"
+
+    if grep -Eq "^iface ${PHYSICAL_INTERFACE} inet " "$INTERFACES_FILE"; then
+        echo "ERROR: Physical interface already has an IPv4 configuration."
+        cp -a "$BACKUP_FILE" "$INTERFACES_FILE"
+        exit 1
+    fi
+
+    cat >> "$INTERFACES_FILE" <<EOF
+
+iface ${PHYSICAL_INTERFACE} inet manual
+
+auto ${BRIDGE_NAME}
+iface ${BRIDGE_NAME} inet static
+    address ${STATIC_IP}
+    gateway ${GATEWAY}
+    bridge-ports ${PHYSICAL_INTERFACE}
+    bridge-stp off
+    bridge-fd 0
+    dns-nameservers ${DNS_SERVER}
+EOF
+
+    echo "Bridge configuration created."
+
+    if ifreload -a; then
+        echo "Network bridge applied successfully."
+    else
+        echo "ERROR: Failed to apply network configuration."
+        cp -a "$BACKUP_FILE" "$INTERFACES_FILE"
+        ifreload -a || true
+        exit 1
+    fi
+
+else
+    echo "Bridge configuration cancelled."
+    exit 1
+fi
+
+echo "[6/10] Configuring hostname resolution..."
+
+HOSTNAME=$(hostname)
+IP_ADDRESS=$(ip -4 -o addr show dev "$BRIDGE_NAME" scope global |
+    awk '{split($4,a,"/"); print a[1]}')
+
+if [ -z "$IP_ADDRESS" ]; then
+    echo "ERROR: Could not detect bridge IP."
+    exit 1
+fi
 
 if ! grep -qE "^[[:space:]]*${IP_ADDRESS}[[:space:]]" /etc/hosts; then
     echo "${IP_ADDRESS} ${HOSTNAME}.local ${HOSTNAME}" >> /etc/hosts
@@ -87,7 +213,7 @@ if ! getent hosts "$HOSTNAME" | grep -qvE '127\.|::1'; then
     exit 1
 fi
 
-echo "[6/9] Installing Proxmox VE components..."
+echo "[7/10] Installing Proxmox VE components..."
 
 apt-get update
 
@@ -101,11 +227,11 @@ apt-get install -y --no-install-recommends \
     pve-firewall \
     novnc-pve
 
-echo "[7/9] Generating SSH host keys..."
+echo "[8/10] Generating SSH host keys..."
 
 ssh-keygen -A
 
-echo "[8/9] Initializing Proxmox services..."
+echo "[9/10] Initializing Proxmox services..."
 
 systemctl reset-failed pve-cluster || true
 systemctl enable pve-cluster
@@ -119,7 +245,7 @@ if ! systemctl is-active --quiet pve-cluster; then
     exit 1
 fi
 
-echo "[9/9] Generating Proxmox certificates..."
+echo "[10/10] Generating Proxmox certificates..."
 
 pvecm updatecerts --force
 
