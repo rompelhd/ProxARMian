@@ -11,17 +11,25 @@ if [ "$(dpkg --print-architecture)" != "arm64" ]; then
     exit 1
 fi
 
-if ! getent hosts download.proxmox.com >/dev/null 2>&1; then
+function check_network {
+    if ! getent hosts download.proxmox.com >/dev/null 2>&1; then
     echo "ERROR: DNS resolution failed."
-    exit 1
-fi
+    return 1
+    fi
 
-if ! timeout 5 bash -c '</dev/tcp/download.proxmox.com/443' 2>/dev/null; then
-    echo "ERROR: Cannot connect to Proxmox repository."
-    exit 1
-fi
+    if ! timeout 5 bash -c '</dev/tcp/download.proxmox.com/443' 2>/dev/null; then
+        echo "ERROR: Cannot connect to Proxmox repository."
+        return 1
+    fi
+    return 0
+}
 
 echo "[1/10] Installing required packages..."
+
+if ! check_network; then
+    echo "ERROR: Network requirements not satisfied."
+    exit 1
+fi
 
 apt-get update
 
@@ -33,6 +41,11 @@ apt-get install -y \
     openssh-server
 
 echo "[2/10] Installing Proxmox GPG key..."
+
+if ! check_network; then
+    echo "ERROR: Network requirements not satisfied."
+    exit 1
+fi
 
 GPG_KEY="/tmp/proxmox-archive-keyring-trixie.gpg"
 
@@ -214,6 +227,11 @@ if ! getent hosts "$HOSTNAME" | grep -qvE '127\.|::1'; then
 fi
 
 echo "[7/10] Installing Proxmox VE components..."
+
+if ! check_network; then
+    echo "ERROR: Network requirements not satisfied."
+    exit 1
+fi
 
 apt-get update
 
